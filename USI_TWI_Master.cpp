@@ -23,6 +23,7 @@
 #define F_CPU 1000000UL	      // Sets up the default speed for delay.h
 #include <util/delay.h>
 #include <avr/io.h>
+#include <Arduino.h>
 #include "USI_TWI_Master.h"
 
 unsigned char USI_TWI_Start_Transceiver_With_Data( unsigned char * , unsigned char );
