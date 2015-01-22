@@ -21,7 +21,7 @@
 #define TINYWIRE_H
 
 #include <inttypes.h>
-#include <Stream.h>
+#include "Stream.h"
 #define USI_SEND         0              // indicates sending to TWI
 #define USI_RCVE         1              // indicates receiving from TWI
 #define USI_BUF_SIZE    16              // bytes in message buffer
@@ -38,9 +38,9 @@ class TinyWire : public Stream
  	TinyWire();
 	void begin();
     void beginTransmission(uint8_t);
-    void write(uint8_t);
     uint8_t endTransmission();
     uint8_t requestFrom(uint8_t, uint8_t);
+	virtual size_t write(uint8_t);
     virtual int available(); 
 	virtual int read();
 	virtual int peek() {};

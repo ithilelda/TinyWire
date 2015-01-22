@@ -31,7 +31,7 @@ TinyWire::TinyWire(){
 // Public Methods //////////////////////////////////////////////////////////////
 
 void TinyWire::begin(){ // initialize I2C lib
-  TinyWire_Master_Initialise();
+  USI_TWI_Master_Initialise();
 }
 
 void TinyWire::beginTransmission(uint8_t slaveAddr){ // setup address & write bit
@@ -39,20 +39,21 @@ void TinyWire::beginTransmission(uint8_t slaveAddr){ // setup address & write bi
   USI_Buf[USI_BufIdx] = (slaveAddr<<TWI_ADR_BITS) | USI_SEND;
 }
 
-void TinyWire::write(uint8_t data){ // buffers up data to send
-  if (USI_BufIdx >= USI_BUF_SIZE) return;         // dont blow out the buffer
+size_t TinyWire::write(uint8_t data){ // buffers up data to send
+  if (USI_BufIdx >= USI_BUF_SIZE) return 0;         // dont blow out the buffer
   USI_BufIdx++;                                   // inc for next byte in buffer
   USI_Buf[USI_BufIdx] = data;
+  return 1;
 }
 
 uint8_t TinyWire::endTransmission(){ // actually sends the buffer
   bool xferOK = false;
   uint8_t errorCode = 0;
-  xferOK = TinyWire_Start_Read_Write(USI_Buf,USI_BufIdx+1); // core func that does the work
+  xferOK = USI_TWI_Start_Read_Write(USI_Buf,USI_BufIdx+1); // core func that does the work
   USI_BufIdx = 0;
   if (xferOK) return 0;
   else {                                  // there was an error
-    errorCode = TinyWire_Get_State_Info(); // this function returns the error number
+    errorCode = USI_TWI_Get_State_Info(); // this function returns the error number
     return errorCode;
   }
 }
@@ -64,7 +65,7 @@ uint8_t TinyWire::requestFrom(uint8_t slaveAddr, uint8_t numBytes){ // setup for
   USI_BytesAvail = numBytes; // save this off in a global
   numBytes++;                // add extra byte to transmit header
   USI_Buf[0] = (slaveAddr<<TWI_ADR_BITS) | USI_RCVE;   // setup address & Rcve bit
-  xferOK = TinyWire_Start_Read_Write(USI_Buf,numBytes); // core func that does the work
+  xferOK = USI_TWI_Start_Read_Write(USI_Buf,numBytes); // core func that does the work
   // USI_Buf now holds the data read
   if (xferOK) return 0;
   else {                                  // there was an error
@@ -78,7 +79,7 @@ int TinyWire::read(){ // returns the bytes received one at a time
   return USI_Buf[USI_LastRead];
 }
 
-uint8_t TinyWire::available(){ // the bytes available that haven't been read yet
+int TinyWire::available(){ // the bytes available that haven't been read yet
   return USI_BytesAvail - (USI_LastRead); 
 }
 
