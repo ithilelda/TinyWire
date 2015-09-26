@@ -24,29 +24,20 @@
 #include "Stream.h"
 
 
-// Clock speed definitions based on F_CPU declared by Arduino platform. Will treat Timer1 as 8-bit
-// regardless of the 16-bit capability on Attinyx4 chips. Since the maximum clock of Attiny can only
-// go up to 20MHz, there is no way that the 8-bit counter will overflow even on standard mode. Thus,
-// The prescaler is fixed to 1 for maximum precision. Also, the interrupt should trigger on both edges
-// of the clock, which means it actually should trigger twice as fast, or count half as many times.
-// In I2C spec, you can go slower than the selected mode but not faster (so 90KHz for standard mode is OK, but 110KHz is not).
-// Thus, in order to comply to that with 1% accuracy internal oscillator and still not overflow the 8-bit counter at 20MHz,
-// I use a 99% clock rate. It doesn't really make a difference at low F_CPU, so you'll need a high clock rate to make a fully compliant
-// I2C device.
-#ifdef WIRE_FAST_MODE // 400 kHz.
-	// The counter needs to count 1.25 on 1MHz to get 400KHz, this is not possible, so we forbid that completely.
-	#if defined(F_CPU) && F_CPU == 1000000L
-		#error "You cannot use fast mode on a 1MHz CPU."
-	#endif
-	#define TIMER1_COMPARE F_CPU / 792000L
-#else // 100 kHz.
-	#define TIMER1_COMPARE F_CPU / 198000L
-#endif
+#define WIRE_BUFFER_SIZE 16
+
+// one cannot expect a half-software implementation to go very fast. As a result of test,
+// ATTiny needs ~10 cycles to setup loops, so for an 8MHz chip, one have about 30 cycles
+// of CPU time left to perform tasks for 100KHz standard speed. 400KHz is a joke. Even at
+// 20MHz, one only has 15 cycles left, so, no fast mode guys! Sorry!
+// It turns out that interrupts take a lot more time than loops, so the previous interrupt
+// design was seriously stupid, and Atmel has a reason to use blocking delays.
+#define WIRE_HIGH_TIME 6 // > 4.7 us, considering rise time, make it 6 on the safe side.
+#define WIRE_LOW_TIME 5 // > 4 us.
 
 
 // MCU dependent port&pin defines. Currently supports x5 and x4 tinies.
-#if defined(__AVR_ATtiny25__) | defined(__AVR_ATtiny45__) | defined(__AVR_ATtiny85__) | \
-    defined(__AVR_AT90Tiny26__) | defined(__AVR_ATtiny26__)
+#if defined(__AVR_ATtiny25__) | defined(__AVR_ATtiny45__) | defined(__AVR_ATtiny85__)
     #define WIRE_DDR			DDRB
     #define WIRE_PORT			PORTB
     #define WIRE_PIN			PINB
@@ -62,26 +53,17 @@
     #define WIRE_DDR			DDRA
     #define WIRE_PORT			PORTA
     #define WIRE_PIN			PINA
-    #define WIRE_DDR_SDA		DDA5
+    #define WIRE_DDR_SDA		DDA6
     #define WIRE_DDR_SCL		DDA4
-	#define WIRE_PORT_SDA		PORTA5
+	#define WIRE_PORT_SDA		PORTA6
     #define WIRE_PORT_SCL		PORTA4
-    #define WIRE_PIN_SDA		PINA5
+    #define WIRE_PIN_SDA		PINA6
     #define WIRE_PIN_SCL		PINA4
 #endif
 
-#define WIRE_BUFFER_SIZE 16
 
-// the defines for the bitfield m_flags.
-#define WIRE_RISING_EDGE	0x01			// The 1st bit is the boolean flag to indicate if the clock is a rising edge.
-#define WIRE_FINISHED		0x02			// The 2nd bit indicates if the transmission has finished or not.
-
-// defines for state machine.
-#define WIRE_STATE_BYTE_START		0x01
-#define WIRE_STATE_WRITE			0x02
-#define WIRE_STATE_ACK				0x03
-#define WIRE_STATE_STRETCH			0x04
-#define WIRE_STATE_READ				0x05
+// the defines for ACK and NACK.
+#define WIRE_NACK_BIT	0x01
 
 
 class TinyWire : public Stream
@@ -89,12 +71,11 @@ class TinyWire : public Stream
   private:
 	uint8_t m_buffer[WIRE_BUFFER_SIZE];
 	uint8_t m_buffer_index, m_current_index, m_nack;
-	uint8_t m_flags, m_state;
 	
   public:
  	TinyWire() {
 		m_buffer_index = m_current_index = 0;
-		m_flags = m_state = m_nack = 0;
+		m_nack = 0;
 	}
 	/**
 	* This is the setup method for I2C master device. Since the master does not have to
@@ -139,21 +120,13 @@ class TinyWire : public Stream
 	virtual int peek() {};
 	virtual void flush() {};
 	void begin(uint8_t address);
-	
-	// the special kid.
-	void on_tick();
+
 };
 
 // deep black magic part.
 // Globally available single instance of Wire.
 extern TinyWire Wire;
 
-// typedef that saves typing.
-typedef void (TinyWire::*TransferCallback) (void);
-
-// globally available callback function pointer that has the type transfer_callback. (used by Timer1 interrupt handler)
-// will move to platform specific files later when I start writing a platform.
-extern TransferCallback transfer_callback;
 
 #endif //WIRE_H
 
