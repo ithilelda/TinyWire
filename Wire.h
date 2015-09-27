@@ -21,10 +21,16 @@
 #define WIRE_H
 
 #include <inttypes.h>
-#include "Stream.h"
+#include <Arduino.h>
+#include <Stream.h>
 
 
+
+// User can modify this to change the maximum buffer size so that they can hold more data in a single transfer.
 #define WIRE_BUFFER_SIZE 16
+
+
+// TODO: define Arduino error codes for endTransmission.
 
 // one cannot expect a half-software implementation to go very fast. As a result of test,
 // ATTiny needs ~10 cycles to setup loops, so for an 8MHz chip, one have about 30 cycles
@@ -68,14 +74,9 @@
 
 class TinyWire : public Stream
 {
-  private:
-	uint8_t m_buffer[WIRE_BUFFER_SIZE];
-	uint8_t m_buffer_index, m_current_index, m_nack;
-	
-  public:
+public:
  	TinyWire() {
 		m_buffer_index = m_current_index = 0;
-		m_nack = 0;
 	}
 	/**
 	* This is the setup method for I2C master device. Since the master does not have to
@@ -84,42 +85,26 @@ class TinyWire : public Stream
 	* public interface, and its use should be limited to as small a scope as possible.
 	*/
 	void begin() {};
-	// only upload the address to buffer.
-    void beginTransmission(uint8_t slave_addr) {
-		m_buffer_index = m_current_index = 0; // current index is only cleared here. Meaning that multiple calls to endTransmission will not work, preventing errors.
-		m_buffer[m_buffer_index] = slave_addr;
-		++m_buffer_index;
-	}
-	// two version of write. the third version is defined by Print already.
-	virtual size_t write(uint8_t data) {
-		if (m_buffer_index >= WIRE_BUFFER_SIZE) return 0;
-		m_buffer[m_buffer_index] = data;
-		++m_buffer_index;
-		return 1;
-	}
-	virtual size_t write(const uint8_t* buffer, size_t size) {
-		if (m_buffer_index >= WIRE_BUFFER_SIZE) return 0;
-		size_t left = WIRE_BUFFER_SIZE - m_buffer_index;
-		if (size > left) {
-			// there is not enough space.
-			memcpy(m_buffer + m_buffer_index, buffer, left);
-			m_buffer_index += left;
-			return left;
-		}
-		else {
-			// there is enough space.
-			memcpy(m_buffer + m_buffer_index, buffer, size);
-			m_buffer_index += size;
-			return size;
-		}
-	}
+	void begin(uint8_t address);
+    void beginTransmission(uint8_t slave_addr);
+	// two version of write. the third version is defined by Print already. No need to repeat.
+	virtual size_t write(uint8_t data);
+	virtual size_t write(const uint8_t* buffer, size_t size);
     uint8_t endTransmission(bool stop=true);
-    uint8_t requestFrom(uint8_t, uint8_t);
+    uint8_t requestFrom(uint8_t addr, uint8_t quantity, bool stop=true);
     virtual int available(); 
 	virtual int read();
 	virtual int peek() {};
 	virtual void flush() {};
-	void begin(uint8_t address);
+
+
+private:
+	uint8_t m_buffer[WIRE_BUFFER_SIZE];
+	uint8_t m_buffer_index, m_current_index;
+	
+	void stop();
+	bool transfer_byte(uint8_t byte);
+	uint8_t TinyWire::read_byte(bool nack);
 
 };
 
