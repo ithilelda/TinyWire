@@ -108,6 +108,108 @@ private:
 
 };
 
+//===================== Definition of inline methods =========================//
+inline void TinyWire::beginTransmission(uint8_t slave_addr) {
+	// current index is only cleared here. Meaning that multiple calls to endTransmission will not work, preventing errors.
+	m_buffer_index = m_current_index = 0;
+	m_buffer[m_buffer_index] = slave_addr;
+	++m_buffer_index;
+}
+inline size_t TinyWire::write(uint8_t data) {
+	if (m_buffer_index >= WIRE_BUFFER_SIZE) return 0;
+	m_buffer[m_buffer_index] = data;
+	++m_buffer_index;
+	return 1;
+}
+inline size_t TinyWire::write(const uint8_t* buffer, size_t size) {
+	if (m_buffer_index >= WIRE_BUFFER_SIZE) return 0;
+	size_t left = WIRE_BUFFER_SIZE - m_buffer_index;
+	if (size > left) {
+		// there is not enough space.
+		memcpy(m_buffer + m_buffer_index, buffer, left);
+		m_buffer_index += left;
+		return left;
+	}
+	else {
+		// there is enough space.
+		memcpy(m_buffer + m_buffer_index, buffer, size);
+		m_buffer_index += size;
+		return size;
+	}
+}
+//============================== Private Methods =============================//
+inline void TinyWire::master_stop() {
+	// hold the SDA line low, SCL line high first.
+	WIRE_PORT |= (1<<WIRE_PORT_SCL);
+	WIRE_PORT &= ~(1<<WIRE_PORT_SDA);
+	// a hack here: the spec specifies a minimum delay but no maximum, so we always delay the maximum time at 100KHz, 5us.
+	// Arduino guarantees that delay above 3us is quite accurate, so 5us is fine for all CPU frequency.
+	delayMicroseconds(WIRE_LOW_TIME);
+	// then we release SDA. STOP condition is done.
+	WIRE_PORT |= (1<<WIRE_PORT_SDA);
+	delayMicroseconds(WIRE_HIGH_TIME);
+}
+
+// the routine to transfer a single byte. No state modified.
+inline bool TinyWire::transfer_byte(uint8_t byte) {
+	// clear flags in registers. Also resets the counter to 0.
+	USISR = (1<<USISIF) | (1<<USIOIF) | (1<<USIPF) | (1<<USIDC);
+	// load the byte into USIDR.
+	USIDR = byte;
+	// debug note: unlike what one thinks intuitively, USICS pins set to 10 doesn't really shift the data register on rising edge, but on the falling edge of SCL.
+	// Need to crunch the document more to understand that. Also, setting USICS to 11 will do weird stuff, where the start condition cannot be correct generated.
+	// When the SDA line is pulled low, the SCL line will go low one cycle before that and bounce back to HIGH magically...
+	while(!(USISR & (1<<USIOIF))) {
+		delayMicroseconds(WIRE_LOW_TIME);
+		USICR |= (1<<USITC); // flip clock to high.
+		delayMicroseconds(WIRE_HIGH_TIME);
+		USICR |= (1<<USITC); // flip clock to low.
+	}
+	// after the loop, we are at the LOW clock of the 8th bit.
+	delayMicroseconds(WIRE_LOW_TIME);
+	// we need to release the SDA line. (PORTA4 was already written to 1 previously, so we only need to reset USIDR.)
+	USIDR = 0XFF;
+	// and make SDA input to read the ACK bit.
+	WIRE_DDR &= ~(1<<WIRE_DDR_SDA);
+	USICR |= (1<<USITC); // flip clock to high.
+	delayMicroseconds(WIRE_HIGH_TIME);
+	USICR |= (1<<USITC); // flip clock to low.
+	// make SDA output again.
+	WIRE_DDR |= (1<<WIRE_DDR_SDA);
+	// Now, return bit 0 of the USIDR, which is the ACK/NACK bit.
+	return USIDR & WIRE_NACK_BIT;
+}
+
+// the routine to receive a single byte. No state modified.
+inline uint8_t TinyWire::read_byte(bool nack) {
+	// clear flags in registers. Also resets the counter to 0.
+	USISR = (1<<USISIF) | (1<<USIOIF) | (1<<USIPF) | (1<<USIDC);
+	while(!(USISR & (1<<USIOIF))) {
+		delayMicroseconds(WIRE_LOW_TIME);
+		USICR |= (1<<USITC); // flip clock to high.
+		delayMicroseconds(WIRE_HIGH_TIME);
+		USICR |= (1<<USITC); // flip clock to low.
+	}
+	// after the loop, we are at the LOW clock of the 8th bit. First read out USIDR.
+	uint8_t data = USIDR;
+	// then prepare to generate ACK bit.
+	// first, make SDA output and release it (set HIGH).
+	WIRE_DDR |= (1<<WIRE_DDR_SDA);
+	WIRE_PORT |= (1<<WIRE_PORT_SDA);
+	// depending on the request of the caller, we either generate ACK (nack = false), or NACK (nack = true).
+	if(nack) USIDR = 0xFF;
+	else USIDR = 0x00;
+	// finally we can flip the clocks.
+	delayMicroseconds(WIRE_LOW_TIME);
+	USICR |= (1<<USITC); // flip clock to high.
+	delayMicroseconds(WIRE_HIGH_TIME);
+	USICR |= (1<<USITC); // flip clock to low.
+	// make SDA input again.
+	WIRE_DDR &= ~(1<<WIRE_DDR_SDA);
+	// regardless of ACK condition, we return the data.
+	return data;
+}
+
 // deep black magic part.
 // Globally available single instance of Wire.
 extern TinyWire Wire;
