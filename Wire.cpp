@@ -18,18 +18,18 @@
 //========================= Public Methods ===================================//
 
 //======== Master Write Related =============//
-inline void TinyWire::beginTransmission(uint8_t slave_addr) {
+void TinyWire::beginTransmission(uint8_t slave_addr) {
 	m_buffer_index = m_current_index = 0; // current index is only cleared here. Meaning that multiple calls to endTransmission will not work, preventing errors.
 	m_buffer[m_buffer_index] = slave_addr;
 	++m_buffer_index;
 }
-inline size_t TinyWire::write(uint8_t data) {
+size_t TinyWire::write(uint8_t data) {
 	if (m_buffer_index >= WIRE_BUFFER_SIZE) return 0;
 	m_buffer[m_buffer_index] = data;
 	++m_buffer_index;
 	return 1;
 }
-inline size_t TinyWire::write(const uint8_t* buffer, size_t size) {
+size_t TinyWire::write(const uint8_t* buffer, size_t size) {
 	if (m_buffer_index >= WIRE_BUFFER_SIZE) return 0;
 	size_t left = WIRE_BUFFER_SIZE - m_buffer_index;
 	if (size > left) {
@@ -51,14 +51,12 @@ inline size_t TinyWire::write(const uint8_t* buffer, size_t size) {
  * Finally, it clears Timer1 and turns on interrupt to start sending data.
  * It only generates the start condition once. There is no repeated start in front of every byte.
  */
-inline uint8_t TinyWire::endTransmission(bool stop) {
+uint8_t TinyWire::endTransmission(bool stop) {
 	if(m_current_index > m_buffer_index) return 4; // repeatedly call endTransmission without calling beginTransmission.
 	// setup the two pins for SCL and SDA as output.
-	WIRE_DDR |= (1<<WIRE_DDR_SCL);
-	WIRE_DDR |= (1<<WIRE_DDR_SDA);
+	WIRE_DDR |= (1<<WIRE_DDR_SCL) | (1<<WIRE_DDR_SDA);
 	// hold high on them to signify a release state.
-	WIRE_PORT |= (1<<WIRE_PORT_SCL);
-	WIRE_PORT |= (1<<WIRE_PORT_SDA);
+	WIRE_PORT |= (1<<WIRE_PORT_SCL) | (1<<WIRE_PORT_SDA);
 	// the data register have to be set to 0xFF too. If one of USIDR OR PORT register is 0, the SDA line will be low.
 	USIDR = 0xFF;
 	// then we can setup the USICR/USISR registers to enable TWI mode.
@@ -84,7 +82,7 @@ inline uint8_t TinyWire::endTransmission(bool stop) {
 	}
 	
 	// If the stop parameter passed in is true, that means we need to generate a stop signal to release the bus. (see arduino.cc library reference)
-	if(stop) stop();
+	if(stop) master_stop();
 	// we also need to release USI, so other protocols can use it.
 	USICR = 0;
 	// returning status code defined by Arduino depending on the result of operation.
@@ -94,7 +92,7 @@ inline uint8_t TinyWire::endTransmission(bool stop) {
 }
 
 //============ Master Read Related =================//
-inline uint8_t TinyWire::requestFrom(uint8_t slave_addr, uint8_t quantity, bool stop){
+uint8_t TinyWire::requestFrom(uint8_t slave_addr, uint8_t quantity, bool stop){
 	if(quantity > WIRE_BUFFER_SIZE) return 0; // we can't handle transfers with more than 16 bytes. There is not enough buffer to hold that.
   	m_buffer_index = quantity - 1; // index starts from 0.
 	m_current_index = 0;
@@ -118,30 +116,30 @@ inline uint8_t TinyWire::requestFrom(uint8_t slave_addr, uint8_t quantity, bool 
 	if(nack) return 0; // no slave answering.
 	// then we receive data for quantity - 1 bytes. Reason below.
 	while(m_current_index < m_buffer_index) {
-		m_buffer[m_current_index] = receive_byte(false);
+		m_buffer[m_current_index] = read_byte(false);
 		++m_current_index;
 	}
 	// in order to save instructions on branch prediction, we write a little more code. 
 	// To stop slave from transferring more data, we need to answer the last byte with NACK.
-	m_buffer[m_current_index] = receive_byte(true);
+	m_buffer[m_current_index] = read_byte(true);
 	// reset m_current_index so that we can read by using available() and read() according to Arduino style.
 	// finally, generate stop condition based on the stop boolean.
-	if(stop) stop();
+	if(stop) master_stop();
 	// and releases USI.
 	USICR = 0;
 	return m_current_index;
 }
-inline int TinyWire::read(){
+int TinyWire::read(){
 	uint8_t tmp = m_buffer[m_current_index];
 	++m_current_index;
 	return tmp;
 }
-inline int TinyWire::available(){
+int TinyWire::available(){
 	return m_buffer_index - m_current_index;
 }
 
 //============================== Private Methods =============================//
-inline void TinyWire::stop() {
+void TinyWire::master_stop() {
 	// hold the SDA line low, SCL line high first.
 	WIRE_PORT |= (1<<WIRE_PORT_SCL);
 	WIRE_PORT &= ~(1<<WIRE_PORT_SDA);
@@ -154,12 +152,15 @@ inline void TinyWire::stop() {
 }
 
 // the routine to transfer a single byte. No state modified.
-inline bool TinyWire::transfer_byte(uint8_t byte) {
+bool TinyWire::transfer_byte(uint8_t byte) {
 	// clear flags in registers. Also resets the counter to 0.
 	USISR = (1<<USISIF) | (1<<USIOIF) | (1<<USIPF) | (1<<USIDC);
-	// load the next byte into USIDR.
+	// load the byte into USIDR.
 	USIDR = byte;
-	while(USISR & (1<<USIORF)) {
+	// debug note: unlike what one thinks intuitively, USICS pins set to 10 doesn't really shift the data register on rising edge, but on the falling edge of SCL.
+	// Need to crunch the document more to understand that. Also, setting USICS to 11 will do weird stuff, where the start condition cannot be correct generated.
+	// When the SDA line is pulled low, the SCL line will go low one cycle before that and bounce back to HIGH magically...
+	while(!(USISR & (1<<USIOIF))) {
 		delayMicroseconds(WIRE_LOW_TIME);
 		USICR |= (1<<USITC); // flip clock to high.
 		delayMicroseconds(WIRE_HIGH_TIME);
@@ -181,10 +182,10 @@ inline bool TinyWire::transfer_byte(uint8_t byte) {
 }
 
 // the routine to receive a single byte. No state modified.
-inline uint8_t TinyWire::read_byte(bool nack) {
+uint8_t TinyWire::read_byte(bool nack) {
 	// clear flags in registers. Also resets the counter to 0.
 	USISR = (1<<USISIF) | (1<<USIOIF) | (1<<USIPF) | (1<<USIDC);
-	while(USISR & (1<<USIORF)) {
+	while(!(USISR & (1<<USIOIF))) {
 		delayMicroseconds(WIRE_LOW_TIME);
 		USICR |= (1<<USITC); // flip clock to high.
 		delayMicroseconds(WIRE_HIGH_TIME);

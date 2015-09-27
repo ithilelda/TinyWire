@@ -102,9 +102,9 @@ private:
 	uint8_t m_buffer[WIRE_BUFFER_SIZE];
 	uint8_t m_buffer_index, m_current_index;
 	
-	void stop();
+	void master_stop();
 	bool transfer_byte(uint8_t byte);
-	uint8_t TinyWire::read_byte(bool nack);
+	uint8_t read_byte(bool nack);
 
 };
 
